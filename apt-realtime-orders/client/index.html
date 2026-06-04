@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Real-Time Orders Dashboard</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 40px 20px;
+    }
+
+    h1 {
+      text-align: center;
+      font-size: 2rem;
+      margin-bottom: 8px;
+      color: #38bdf8;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #64748b;
+      margin-bottom: 30px;
+      font-size: 0.95rem;
+    }
+
+    /* ── Status Bar ── */
+    #status {
+      text-align: center;
+      margin-bottom: 30px;
+      font-size: 0.9rem;
+      padding: 8px 20px;
+      border-radius: 999px;
+      display: inline-block;
+      position: relative;
+      left: 50%;
+      transform: translateX(-50%);
+    }
+    .connected    { background: #064e3b; color: #34d399; border: 1px solid #34d399; }
+    .disconnected { background: #450a0a; color: #f87171; border: 1px solid #f87171; }
+
+    /* ── Form ── */
+    .form-card {
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 16px;
+      padding: 24px;
+      max-width: 600px;
+      margin: 0 auto 40px;
+    }
+
+    .form-card h2 {
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+      color: #94a3b8;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .form-row input, .form-row select {
+      flex: 1;
+      min-width: 140px;
+      padding: 10px 14px;
+      border-radius: 8px;
+      border: 1px solid #334155;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-size: 0.9rem;
+      outline: none;
+    }
+
+    .form-row input:focus, .form-row select:focus {
+      border-color: #38bdf8;
+    }
+
+    button {
+      padding: 10px 24px;
+      background: #0ea5e9;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    button:hover { background: #0284c7; }
+
+    /* ── Orders Table ── */
+    .table-wrapper {
+      max-width: 900px;
+      margin: 0 auto;
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: #1e293b;
+      border-radius: 16px;
+      overflow: hidden;
+    }
+
+    thead {
+      background: #0f172a;
+      color: #94a3b8;
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    th, td {
+      padding: 14px 18px;
+      text-align: left;
+      border-bottom: 1px solid #334155;
+    }
+
+    tbody tr {
+      transition: background 0.3s;
+    }
+
+    tbody tr:hover { background: #263548; }
+
+    /* Status Badge */
+    .badge {
+      padding: 4px 12px;
+      border-radius: 999px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+    .badge.pending   { background: #451a03; color: #fb923c; }
+    .badge.shipped   { background: #1e3a5f; color: #60a5fa; }
+    .badge.delivered { background: #064e3b; color: #34d399; }
+
+    /* Flash animation for new rows */
+    @keyframes flashIn {
+      0%   { background: #1d4ed8; }
+      100% { background: transparent; }
+    }
+    .flash { animation: flashIn 1.5s ease-out; }
+
+    #empty-msg {
+      text-align: center;
+      padding: 40px;
+      color: #475569;
+    }
+  </style>
+</head>
+<body>
+
+  <h1> Real-Time Orders Dashboard</h1>
+  <p class="subtitle">Live updates via WebSocket — no refresh needed</p>
+
+  <div id="status" class="disconnected">⛔ Connecting...</div>
+
+  <!-- Add Order Form -->
+  <div class="form-card">
+    <h2>➕ Add New Order</h2>
+    <div class="form-row">
+      <input type="text" id="customer" placeholder="Customer Name" />
+      <input type="text" id="product"  placeholder="Product Name" />
+      <select id="status-select">
+        <option value="pending">Pending</option>
+        <option value="shipped">Shipped</option>
+        <option value="delivered">Delivered</option>
+      </select>
+      <button onclick="addOrder()">Add Order</button>
+    </div>
+  </div>
+
+  <!-- Orders Table -->
+  <div class="table-wrapper">
+    <table>
+      <thead>
+        <tr>
+          <th>#ID</th>
+          <th>Customer</th>
+          <th>Product</th>
+          <th>Status</th>
+          <th>Updated At</th>
+        </tr>
+      </thead>
+      <tbody id="orders-body">
+        <tr><td colspan="5" id="empty-msg">Waiting for orders...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <script>
+    // ── WebSocket Connection ──────────────────────────────────
+    const ws = new WebSocket('ws://localhost:3000');
+    const statusEl = document.getElementById('status');
+
+    ws.onopen = () => {
+      statusEl.textContent = '✅ Connected — Live updates active';
+      statusEl.className = 'connected';
+    };
+
+    ws.onclose = () => {
+      statusEl.textContent = '⛔ Disconnected from server';
+      statusEl.className = 'disconnected';
+    };
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      console.log('📨 Received:', data);
+      addRowToTable(data);
+    };
+
+    // ── Add Row to Table ──────────────────────────────────────
+    function addRowToTable(order) {
+      const tbody = document.getElementById('orders-body');
+
+      // Remove "waiting" message
+      const emptyMsg = document.getElementById('empty-msg');
+      if (emptyMsg) emptyMsg.parentElement.remove();
+
+      const row = document.createElement('tr');
+      row.classList.add('flash');
+      row.innerHTML = `
+        <td>#${order.id}</td>
+        <td>${order.customer_name}</td>
+        <td>${order.product_name}</td>
+        <td><span class="badge ${order.status}">${order.status}</span></td>
+        <td>${new Date(order.updated_at).toLocaleString()}</td>
+      `;
+      tbody.prepend(row); // newest on top
+    }
+
+    // ── Send Order via API ────────────────────────────────────
+    async function addOrder() {
+      const customer_name  = document.getElementById('customer').value.trim();
+      const product_name   = document.getElementById('product').value.trim();
+      const status         = document.getElementById('status-select').value;
+
+      if (!customer_name || !product_name) {
+        alert('Please fill in all fields!');
+        return;
+      }
+
+      await fetch('/order', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ customer_name, product_name, status })
+      });
+
+      // Clear inputs
+      document.getElementById('customer').value = '';
+      document.getElementById('product').value  = '';
+    }
+  </script>
+
+</body>
+</html>
